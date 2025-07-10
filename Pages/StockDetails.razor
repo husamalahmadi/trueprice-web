@@ -1,0 +1,231 @@
+﻿@page "/stock/{Symbol}/{CompanyName}"
+@using System.Text.Json
+@inject HttpClient Http
+@inject NavigationManager Navigation
+
+<div class="stock-details-wrapper" dir="rtl">
+    <h2 class="text-center">📋 تفاصيل السهم</h2>
+
+    @if (IsLoading)
+    {
+        <p class="loading-text">جاري تحميل تفاصيل السهم...</p>
+    }
+    else if (StockPrice >= 0)
+    {
+        <div class="stock-details-card">
+            <div class="stock-header">
+                <h3>@CompanyName</h3>
+                <span class="ticker">@Symbol</span>
+            </div>
+
+            <div class="metrics">
+                <p>سعر السهم: <strong>@($"{StockPrice:N2} ﷼")</strong></p>
+                <p>القيمة العادلة (EV): @($"{FairValueEV:N2} ﷼")</p>
+                <p>القيمة العادلة (PE): @($"{FairValuePE:N2} ﷼")</p>
+                <p>القيمة العادلة (PS): @($"{FairValuePS:N2} ﷼")</p>
+                <p>القيمة العادلة الموزونة: <strong>@($"{WeightedFairValue:N2} ﷼")</strong></p>
+            </div>
+
+            <div class="evaluation">
+                <strong>تقييم:</strong>
+                <span class="@GetValuationColor()">@GetValuationMessage()</span>
+            </div>
+
+            <div class="kpis">
+                <p>هامش الربح الإجمالي: <span class="@GetMarginColor(GrossMargin, 20, 40)">@($"{GrossMargin:N2}%")</span></p>
+                <p>الهامش التشغيلي: <span class="@GetMarginColor(OperatingMargin, 10, 20)">@($"{OperatingMargin:N2}%")</span></p>
+                <p>هامش الربح الصافي: <span class="@GetMarginColor(ProfitMargin, 5, 15)">@($"{ProfitMargin:N2}%")</span></p>
+                <p>العائد على الأصول (ROA): <span class="@GetMarginColor(ROA, 3, 7)">@($"{ROA:N2}%")</span></p>
+                <p>العائد على حقوق المساهمين (ROE): <span class="@GetMarginColor(ROE, 8, 15)">@($"{ROE:N2}%")</span></p>
+            </div>
+
+            <div class="alert alert-warning mt-3">
+                ⚠️ <strong>تنبيه:</strong> هذه ليست توصية استثمارية. قم بإجراء بحثك قبل اتخاذ القرار.
+            </div>
+
+            <div class="share-buttons mt-3">
+                <a href="@XShareUrl" target="_blank" rel="noopener noreferrer" title="مشاركة عبر X">
+                    <img class="icon" src="X_logo.jpg" alt="X" />
+                </a>
+            </div>
+
+            <button class="btn btn-primary mt-4" @onclick="GoHome">العودة إلى الصفحة الرئيسية</button>
+        </div>
+    }
+    else
+    {
+        <div class="alert alert-danger">فشل في تحميل تفاصيل السهم.</div>
+        <button class="btn btn-primary mt-4" @onclick="GoHome">العودة إلى الصفحة الرئيسية</button>
+    }
+</div>
+
+<style>
+    .share-buttons {
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-top: 1rem;
+        justify-content: flex-start;
+    }
+
+        .share-buttons .icon {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background-color: #f1f1f1;
+            padding: 4px;
+            transition: transform 0.2s;
+        }
+
+            .share-buttons .icon:hover {
+                transform: scale(1.15);
+            }
+</style>
+
+@code {
+    [Parameter] public string Symbol { get; set; } = string.Empty;
+    [Parameter] public string? CompanyName { get; set; }
+
+    decimal StockPrice = -1;
+    decimal FairValueEV = 0;
+    decimal FairValuePE = 0;
+    decimal FairValuePS = 0;
+    decimal WeightedFairValue = 0;
+    decimal GrossMargin = 0;
+    decimal ProfitMargin = 0;
+    decimal OperatingMargin = 0;
+    decimal ROA = 0;
+    decimal ROE = 0;
+    bool IsLoading = true;
+
+    string XShareUrl = "";
+
+    void GoHome() => Navigation.NavigateTo("/");
+
+    private string GetValuationMessage()
+    {
+        if (StockPrice <= 0) return string.Empty;
+        var diff = WeightedFairValue - StockPrice;
+        var percent = (diff / StockPrice) * 100;
+        if (percent >= 25) return "استثمار جيد";
+        else if (percent >= 0) return "السهم مقيم بشكل عادل";
+        else return "السهم مبالغ في قيمته";
+    }
+
+    private string GetValuationColor()
+    {
+        if (StockPrice <= 0) return "text-secondary";
+        var diff = WeightedFairValue - StockPrice;
+        var percent = (diff / StockPrice) * 100;
+        if (percent >= 25) return "text-success";
+        else if (percent >= 0) return "text-primary";
+        else return "text-danger";
+    }
+
+    private string GetMarginColor(decimal value, decimal low, decimal high)
+    {
+        if (value < low) return "text-danger";
+        else if (value < high) return "text-warning";
+        else return "text-success";
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var encodedUrl = Uri.EscapeDataString(Navigation.Uri);
+            var encodedText = Uri.EscapeDataString($"تفاصيل السهم {CompanyName} ({Symbol})");
+
+            XShareUrl = $"https://x.com/share?url={encodedUrl}&text={encodedText}";
+        
+            var fullSymbol = Symbol + ":TADAWUL";
+            var result = await GetValuationMetricsAsync(fullSymbol);
+
+            if (result.Price == 0)
+            {
+                await Task.Delay(15000);
+                result = await GetValuationMetricsAsync(fullSymbol);
+            }
+
+            StockPrice = result.Price;
+            FairValueEV = result.FairValueEV;
+            FairValuePE = result.FairValuePE;
+            FairValuePS = result.FairValuePS;
+            WeightedFairValue = result.WeightedFairValue;
+        }
+        catch
+        {
+            StockPrice = -1;
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+    }
+
+    public async Task<(decimal Price, decimal FairValueEV, decimal FairValuePE, decimal FairValuePS, decimal WeightedFairValue)> GetValuationMetricsAsync(string stockSymbol)
+    {
+        try
+        {
+            var apiKey = "5da413057f75498490b0303582e0d0de";
+            var baseUrl = "https://api.twelvedata.com";
+
+            var priceUrl = $"{baseUrl}/price?symbol={stockSymbol}&apikey={apiKey}";
+            var rawPrice = await Http.GetStringAsync(priceUrl);
+            var statsUrl = $"{baseUrl}/statistics?symbol={stockSymbol}&apikey={apiKey}";
+            var balanceSheetUrl = $"{baseUrl}/balance_sheet?symbol={stockSymbol}&apikey={apiKey}";
+            var incomeStatementUrl = $"{baseUrl}/income_statement?symbol={stockSymbol}&apikey={apiKey}";
+
+            using var priceDoc = JsonDocument.Parse(rawPrice);
+            var priceJson = priceDoc.RootElement;
+            using var statsDoc = JsonDocument.Parse(await Http.GetStringAsync(statsUrl));
+            var statsJson = statsDoc.RootElement;
+            using var balanceDoc = JsonDocument.Parse(await Http.GetStringAsync(balanceSheetUrl));
+            var balanceJson = balanceDoc.RootElement;
+            using var incomeDoc = JsonDocument.Parse(await Http.GetStringAsync(incomeStatementUrl));
+            var incomeJson = incomeDoc.RootElement;
+
+            decimal TryParse(JsonElement el) =>
+                el.ValueKind == JsonValueKind.String && decimal.TryParse(el.GetString(), out var val) ? val :
+                el.ValueKind == JsonValueKind.Number ? el.GetDecimal() : 0;
+
+            decimal price = TryParse(priceJson.GetProperty("price"));
+            var stats = statsJson.GetProperty("statistics");
+            var balanceSheet = balanceJson.GetProperty("balance_sheet")[0];
+            var incomeSheet = incomeJson.GetProperty("income_statement")[0];
+
+            decimal enterpriseValue = TryParse(stats.GetProperty("valuations_metrics").GetProperty("enterprise_value"));
+            decimal sharesOutstanding = TryParse(stats.GetProperty("stock_statistics").GetProperty("shares_outstanding"));
+            decimal allCash = TryParse(balanceSheet.GetProperty("assets").GetProperty("current_assets").GetProperty("cash"));
+            decimal longTermDebt = TryParse(balanceSheet.GetProperty("liabilities").GetProperty("non_current_liabilities").GetProperty("long_term_debt"));
+            decimal forwardPE = TryParse(stats.GetProperty("valuations_metrics").GetProperty("forward_pe"));
+            decimal netIncome = TryParse(incomeSheet.GetProperty("net_income"));
+            decimal priceToSale = TryParse(stats.GetProperty("valuations_metrics").GetProperty("price_to_sales_ttm"));
+            decimal allSales = TryParse(incomeSheet.GetProperty("sales"));
+
+            decimal fairValueEV = 0, fairValuePE = 0, fairValuePS = 0;
+
+            if (sharesOutstanding > 0)
+            {
+                fairValueEV = (enterpriseValue - longTermDebt + allCash) / sharesOutstanding;
+                fairValuePE = (forwardPE * netIncome) / sharesOutstanding;
+                fairValuePS = (priceToSale * allSales) / sharesOutstanding;
+            }
+
+            decimal weightedFairValue = (fairValueEV * 0.5m) + (fairValuePE * 0.25m) + (fairValuePS * 0.25m);
+
+            GrossMargin = TryParse(stats.GetProperty("financials").GetProperty("gross_margin")) * 100;
+            ProfitMargin = TryParse(stats.GetProperty("financials").GetProperty("profit_margin")) * 100;
+            OperatingMargin = TryParse(stats.GetProperty("financials").GetProperty("operating_margin")) * 100;
+            ROA = TryParse(stats.GetProperty("financials").GetProperty("return_on_assets_ttm")) * 100;
+            ROE = TryParse(stats.GetProperty("financials").GetProperty("return_on_equity_ttm")) * 100;
+
+            return (price, fairValueEV, fairValuePE, fairValuePS, weightedFairValue);
+        }
+        catch
+        {
+            return (0, 0, 0, 0, 0);
+        }
+    }
+}

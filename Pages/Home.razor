@@ -1,0 +1,186 @@
+﻿@page "/"
+@using TruePrice.Services
+@using System.Text.Json
+@using System.Text.Json.Serialization
+@inject HttpClient Http
+@inject StockApiService ApiService
+@inject NavigationManager Navigation
+@inject StockSessionCache SessionCache
+
+<style>
+    .industry-section {
+        border: 3px solid #dee2e6;
+        border-radius: 12px;
+        padding: 1rem;
+        margin-bottom: 2rem;
+        position: relative;
+        background-color: #fdfdfd;
+    }
+
+    .industry-label {
+        position: absolute;
+        top: -1.2rem;
+        right: 1.25rem;
+        background-color: #1b6ec2;
+        color: white;
+        padding: 0.5rem 1rem;
+        font-size: 1.1rem;
+        font-weight: bold;
+        border-radius: 8px;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    }
+</style>
+
+<div class="home-wrapper" dir="rtl">
+    <h2 class="page-title">📈 قائمة أسعار الأسهم السعودية (تاسي)</h2>
+
+    <div class="search-box">
+        <input class="form-control" @bind="SearchTerm" @bind:event="oninput" placeholder="ابحث عن رمز أو اسم الشركة..." />
+    </div>
+
+    @if (LoadError != null)
+    {
+        <div class="alert alert-danger">@LoadError</div>
+    }
+    else if (!IsLoaded)
+    {
+        <p>جاري تحميل البيانات...</p>
+    }
+    else if (!FilteredGroupedStocks.Any())
+    {
+        <p>لم يتم العثور على نتائج.</p>
+    }
+    else
+    {
+        @foreach (var industry in FilteredGroupedStocks)
+        {
+            <div class="industry-section">
+                <div class="industry-label">@industry.Key</div>
+                <div class="stock-list">
+                    @foreach (var stock in industry.Value)
+                    {
+                        <div class="stock-card" @onclick="() => NavigateToDetails(stock.Ticker, stock.CompanyName)">
+                            <div class="card-header">
+                                <h4>@stock.Ticker</h4>
+                                <span class="price">@($"{stock.Price:N2} ﷼")</span>
+                            </div>
+                            <p class="company-name">@stock.CompanyName</p>
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+    }
+</div>
+
+@code {
+    private Dictionary<string, List<StockInfo>> GroupedStocks = new();
+    private string? LoadError;
+    private string SearchTerm = string.Empty;
+    private bool IsLoaded = false;
+
+    private Dictionary<string, List<StockInfo>> FilteredGroupedStocks =>
+        string.IsNullOrWhiteSpace(SearchTerm)
+            ? GroupedStocks
+            : GroupedStocks
+                .Where(g => g.Value.Any(s => s.Ticker.Contains(SearchTerm, StringComparison.OrdinalIgnoreCase)
+                                          || s.CompanyName.Contains(SearchTerm, StringComparison.OrdinalIgnoreCase)))
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.Value.Where(s => s.Ticker.Contains(SearchTerm, StringComparison.OrdinalIgnoreCase)
+                                          || s.CompanyName.Contains(SearchTerm, StringComparison.OrdinalIgnoreCase)).ToList()
+                );
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var json = await Http.GetStringAsync("data/tasi_grouped_by_industry.json");
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            options.Converters.Add(new FlexibleStringConverter());
+            var rawGroups = JsonSerializer.Deserialize<Dictionary<string, List<CompanyJson>>>(json, options);
+
+            var allSymbols = rawGroups.SelectMany(g => g.Value.Select(c => c.Ticker + ":TADAWUL")).Distinct().ToList();
+            Dictionary<string, decimal> prices;
+
+            if (SessionCache.CachedPrices != null && SessionCache.CachedPrices.Count > 0)
+            {
+                prices = SessionCache.CachedPrices;
+            }
+            else
+            {
+                prices = await ApiService.GetPricesAsync(allSymbols);
+                SessionCache.CachedPrices = prices;
+                SessionCache.CachedAt = DateTime.Now;
+            }
+
+            foreach (var group in rawGroups)
+            {
+                var stocks = new List<StockInfo>();
+                foreach (var company in group.Value)
+                {
+                    var fullSymbol = company.Ticker + ":TADAWUL";
+                    if (prices.TryGetValue(fullSymbol, out var price))
+                    {
+                        stocks.Add(new StockInfo
+                        {
+                            Ticker = company.Ticker,
+                            CompanyName = company.Company,
+                            Price = price
+                        });
+                    }
+                }
+                if (stocks.Any())
+                {
+                    GroupedStocks[group.Key] = stocks;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            LoadError = $"حدث خطأ أثناء تحميل البيانات: {ex.Message}";
+        }
+        finally
+        {
+            IsLoaded = true;
+        }
+    }
+
+    private void NavigateToDetails(string ticker, string companyName)
+    {
+        var encodedName = Uri.EscapeDataString(companyName);
+        Navigation.NavigateTo($"/stock/{ticker}/{encodedName}");
+    }
+
+    public class StockInfo
+    {
+        public string Ticker { get; set; }
+        public string CompanyName { get; set; }
+        public decimal Price { get; set; }
+    }
+
+    public class CompanyJson
+    {
+        [JsonConverter(typeof(FlexibleStringConverter))]
+        public string Ticker { get; set; }
+        public string Company { get; set; }
+    }
+
+    public class FlexibleStringConverter : JsonConverter<string>
+    {
+        public override string? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            return reader.TokenType switch
+            {
+                JsonTokenType.String => reader.GetString(),
+                JsonTokenType.Number => reader.GetDouble().ToString(),
+                _ => throw new JsonException($"Unexpected token {reader.TokenType} when parsing string.")
+            };
+        }
+
+        public override void Write(Utf8JsonWriter writer, string value, JsonSerializerOptions options)
+        {
+            writer.WriteStringValue(value);
+        }
+    }
+}
