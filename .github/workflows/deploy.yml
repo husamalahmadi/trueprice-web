@@ -10,14 +10,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup .NET SDK
+      - name: Setup .NET 9 SDK
         uses: actions/setup-dotnet@v4
         with:
-        dotnet-version: '9.0.100-preview.3'  # ✅ match your project’s SDK
-
+          dotnet-version: '9.0.100-preview.3'  # Matches your project target: net9.0
 
       - name: Restore dependencies
         run: dotnet restore
@@ -28,7 +27,7 @@ jobs:
       - name: Publish the app
         run: dotnet publish -c Release -o release
 
-      - name: Add .nojekyll file
+      - name: Add .nojekyll to bypass GitHub Pages Jekyll processing
         run: touch release/wwwroot/.nojekyll
 
       - name: Deploy to GitHub Pages
